@@ -1,9 +1,10 @@
 import 'dart:io';
+import 'dart:typed_data'; // Import Uint8List
 import 'package:syncfusion_flutter_pdf/pdf.dart';
 
 /// Represents one paragraph and the page it belongs to.
 class ParagraphChunk {
-  final int page;
+  final int page; // This is the 1-based page number
   final String text;
 
   ParagraphChunk({
@@ -16,13 +17,21 @@ class PdfTextExtractorService {
   /// Extracts paragraphs from the PDF at [path], preserving the page number for each paragraph.
   static List<ParagraphChunk> extractParagraphsFromFile(String path) {
     final bytes = File(path).readAsBytesSync();
-    final PdfDocument document = PdfDocument(inputBytes: bytes);
+    return _extractParagraphsFromBytesInternal(bytes);
+  }
 
+  /// Extracts paragraphs from the PDF [bytes] for web, preserving the page number.
+  static List<ParagraphChunk> extractParagraphsFromBytes(Uint8List bytes) {
+    return _extractParagraphsFromBytesInternal(bytes);
+  }
+
+  // Internal helper to avoid code duplication
+  static List<ParagraphChunk> _extractParagraphsFromBytesInternal(Uint8List bytes) {
+    final PdfDocument document = PdfDocument(inputBytes: bytes);
     List<ParagraphChunk> paragraphs = [];
 
     for (int pageIndex = 0; pageIndex < document.pages.count; pageIndex++) {
-      final PdfPage page = document.pages[pageIndex];
-
+      // Note: PdfTextExtractor uses the document object
       final String pageText = PdfTextExtractor(document).extractText(
         startPageIndex: pageIndex,
         endPageIndex: pageIndex,
@@ -33,7 +42,8 @@ class PdfTextExtractorService {
       for (final p in pageParagraphs) {
         paragraphs.add(
           ParagraphChunk(
-            page: pageIndex + 1, // real PDF pages are 1-based
+            // Key Fix: Store page as 1-based page number
+            page: pageIndex + 1,
             text: p,
           ),
         );
