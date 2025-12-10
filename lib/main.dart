@@ -7,7 +7,6 @@ import 'package:http/http.dart' as http;
 import 'dart:convert';
 import 'package:pdfx/pdfx.dart';
 import 'dart:html' as html;
-import 'dart:math' as math;
 import 'keys.dart'; // Your API key for OCR
 import 'ExtarctorService.dart'; // Your paragraph extraction logic
 
@@ -60,6 +59,22 @@ class _HomePageState extends State<HomePage> {
 
   // Using a placeholder for API key, assume 'ocrApiKey' is defined in 'keys.dart'
   final String apiKey = ocrApiKey;
+
+  // KEY ADDITION 1: TextEditingController
+  late TextEditingController _textController;
+
+  @override
+  void initState() {
+    super.initState();
+    // Initialize the controller with the current extractedText
+    _textController = TextEditingController(text: extractedText);
+  }
+
+  @override
+  void dispose() {
+    _textController.dispose();
+    super.dispose();
+  }
 
   // ------------------ PICK PDF ------------------
   Future<void> pickPdf() async {
@@ -140,7 +155,11 @@ class _HomePageState extends State<HomePage> {
     } catch (e) {
       setState(() => extractedText = "OCR failed: $e");
     } finally {
-      setState(() => isLoading = false);
+      setState(() {
+        isLoading = false;
+        // Ensure controller is updated when OCR completes
+        _textController.text = extractedText;
+      });
     }
   }
 
@@ -154,7 +173,11 @@ class _HomePageState extends State<HomePage> {
     } catch (e) {
       setState(() => extractedText = "OCR failed: $e");
     } finally {
-      setState(() => isLoading = false);
+      setState(() {
+        isLoading = false;
+        // Ensure controller is updated when OCR completes
+        _textController.text = extractedText;
+      });
     }
   }
 
@@ -282,8 +305,9 @@ class _HomePageState extends State<HomePage> {
 
   // Returns a ranked list of ScoredChunk objects
   Future<List<ScoredChunk>> compareChunks() async {
+    // extractedText now holds either the OCR result OR the manually typed text
     if (extractedText.isEmpty || chunks.isEmpty) {
-      log('DEBUG: Comparison skipped. OCR text empty or no chunks.');
+      log('DEBUG: Comparison skipped. Search text empty or no chunks.');
       return [];
     }
 
@@ -359,7 +383,7 @@ class _HomePageState extends State<HomePage> {
     }
   }
 
-  // ------------------ UI (BUTTON UPDATED) ------------------
+  // ------------------ UI (Updated for Editable Text) ------------------
   @override
   Widget build(BuildContext context) {
     const fmupYellow = Color(0xFFD4A017);
@@ -369,6 +393,12 @@ class _HomePageState extends State<HomePage> {
       padding: const EdgeInsets.symmetric(vertical: 16),
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
     );
+
+    // Minimalistic synchronization: Update controller if state changed externally (e.g., after OCR)
+    // This is less efficient than a listener but satisfies the bare-minimum requirement.
+    if (_textController.text != extractedText) {
+      _textController.text = extractedText;
+    }
 
     return Scaffold(
       appBar: AppBar(title: const Text('QuickLens')),
@@ -397,20 +427,32 @@ class _HomePageState extends State<HomePage> {
                 decoration: BoxDecoration(color: Colors.black12, borderRadius: BorderRadius.circular(12)),
                 child: isLoading
                     ? const Center(child: CircularProgressIndicator())
-                    : SingleChildScrollView(
-                  child: SelectableText(
-                    extractedText.isEmpty ? "OCR text will appear here" : extractedText,
-                    style: const TextStyle(fontSize: 16, height: 1.5),
+                // KEY CHANGE 2 & 3: Replace SelectableText with TextFormField and use onChanged
+                    : TextFormField(
+                  controller: _textController,
+                  maxLines: null, // Allows multiline input
+                  expands: true, // Takes up the available space
+                  textAlignVertical: TextAlignVertical.top,
+                  keyboardType: TextInputType.multiline,
+                  decoration: const InputDecoration(
+                    hintText: "Enter OCR text or type your own search text here...",
+                    border: InputBorder.none, // Removes default border
                   ),
+                  style: const TextStyle(fontSize: 16, height: 1.5),
+                  onChanged: (newText) {
+                    // Update the state variable directly for comparison
+                    extractedText = newText;
+                  },
                 ),
               ),
             ),
             const SizedBox(height: 16),
             ElevatedButton.icon(
               onPressed: () async {
+                // extractedText is now updated by the TextFormField's onChanged callback
                 if (chunks.isEmpty || extractedText.isEmpty) {
                   ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(content: Text('Please select a PDF and extract text from an image first.')),
+                    const SnackBar(content: Text('Please select a PDF and extract text from an image/type text first.')),
                   );
                   return;
                 }
@@ -468,7 +510,7 @@ class _TopChunkNavigatorState extends State<TopChunkNavigator> {
     // Get the chunk for the current rank
     final currentChunk = widget.rankedChunks[currentRankIndex];
     // The PdfController uses a 0-based index for initialPage
-    final targetPageIndex0Based = currentChunk.chunk.page - 1;
+    final targetPageIndex0Based = currentChunk.chunk.page;
 
     // Use the existing PDF viewer, passing the target page
     return PdfChunkNavigator(
@@ -547,7 +589,7 @@ class _TopChunkNavigatorWebState extends State<TopChunkNavigatorWeb> {
     }
 
     final currentChunk = widget.rankedChunks[currentRankIndex];
-    final targetPageIndex0Based = currentChunk.chunk.page - 1;
+    final targetPageIndex0Based = currentChunk.chunk.page;
 
     return PdfChunkNavigatorWeb(
       key: ValueKey(currentChunk.chunk.page), // Force rebuild of PdfChunkNavigatorWeb when rank changes
@@ -687,7 +729,7 @@ class _PdfChunkNavigatorState extends State<PdfChunkNavigator> {
         title: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text("PDF Viewer – Page ${currentPage + 1}/$totalPages"),
+            Text("PDF Viewer – Page $currentPage/$totalPages"),
             Text(
               'Rank ${widget.currentRank} (Score: ${widget.currentScore.toStringAsFixed(4)})',
               style: const TextStyle(fontSize: 14, color: Colors.black54),
@@ -872,7 +914,7 @@ class _PdfChunkNavigatorWebState extends State<PdfChunkNavigatorWeb> {
         title: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text("PDF Viewer – Page ${currentPage + 1}/$totalPages"),
+            Text("PDF Viewer – Page $currentPage/$totalPages"),
             Text(
               'Rank ${widget.currentRank} (Score: ${widget.currentScore.toStringAsFixed(4)})',
               style: const TextStyle(fontSize: 14, color: Colors.black54),
