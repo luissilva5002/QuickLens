@@ -34,6 +34,7 @@ It uses chunk-based processing and intelligent navigation to let you inspect doc
 
 ## 📂 Project Structure
 
+```text
 quicklens/
  ├── lib/
  │   ├── pdfViewer.dart        # Core PDF visualization logic
@@ -43,6 +44,7 @@ quicklens/
  ├── web/                      # Web-specific configuration
  ├── assets/                   # Static assets (icons, models, fonts)
  └── README.md                 # Project documentation
+ ```
 
 ## 🌐 Live Demo
 
