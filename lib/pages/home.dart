@@ -13,6 +13,7 @@ import '../models/scored_chunk.dart';
 import '../services/file_service.dart';
 import '../services/ocr_service.dart';
 import '../services/comparison_service.dart';
+import '../services/vectorisation_service.dart';
 import '../widgets/pdf_navigator.dart';
 
 class HomePage extends StatefulWidget {
@@ -32,21 +33,43 @@ class _HomePageState extends State<HomePage> {
   String extractedText = "";
   bool isLoading = false;
 
-  // KEY ADDITION 1: TextEditingController
   late TextEditingController _textController;
 
+  // FIX: New Service Instantiation
+  final WebVectorService _vectorService = WebVectorService();
+  late PdfTextExtractorService _pdfExtractorService; // Will be initialized in initState
+
   final OcrService _ocrService = OcrService(apiKey: ocrApiKey);
-  final ComparisonService _comparisonService = ComparisonService();
+  final ComparisonService _comparisonService = ComparisonService(); // Will be updated later
 
   @override
   void initState() {
     super.initState();
     _textController = TextEditingController(text: extractedText);
+
+    // FIX 1: Initialize the new extractor service with the vector service dependency
+    _pdfExtractorService = PdfTextExtractorService(_vectorService);
+
+    // FIX 2: Start model loading asynchronously
+    _initializeServices();
+  }
+
+  // Method to handle asynchronous initialization (TFLite model loading)
+  Future<void> _initializeServices() async {
+    try {
+      // This loads the TFLite model and vocab only once when the app starts.
+      await _pdfExtractorService.initialize();
+      log('DEBUG: TFLite model loaded successfully.');
+    } catch (e) {
+      log('FATAL ERROR: Failed to load TFLite model or vocab: $e');
+      // In a real app, you would show a persistent error to the user here.
+    }
   }
 
   @override
   void dispose() {
     _textController.dispose();
+    _vectorService.dispose(); // FIX 3: IMPORTANT: Close the TFLite interpreter
     super.dispose();
   }
 
@@ -56,45 +79,59 @@ class _HomePageState extends State<HomePage> {
 
     if (result != null) {
       if (kIsWeb) {
-        // FIX: Assign Uint8List from FilePickResult.bytes
         pdfBytes = result.bytes;
       } else {
-        // FIX: Assign File from FilePickResult.path
         pdfFile = File(result.path!);
       }
-      await splitPdf();
+      await splitPdf(); // This now calls the new async method
     }
   }
 
+  // FIX: Update splitPdf to use the instance methods and be asynchronous
   Future<void> splitPdf() async {
     if ((pdfFile == null && !kIsWeb) || (kIsWeb && pdfBytes == null)) return;
+
+    // Optional: Re-check initialization, especially if initialization failed earlier
+    if (!_pdfExtractorService.isInitialized) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('TFLite Model not ready. Please wait or check logs.')),
+      );
+      return;
+    }
 
     setState(() {
       loading = true;
       chunks.clear();
     });
 
-    log('DEBUG: Starting PDF split...');
+    log('DEBUG: Starting PDF split and vectorization...');
 
     try {
+      List<ParagraphChunk> extracted;
       if (kIsWeb) {
-        // FIX: Cast the result explicitly to List<ParagraphChunk>
-        final extracted = PdfTextExtractorService.extractParagraphsFromBytes(pdfBytes!);
-        chunks.addAll(extracted.cast<ParagraphChunk>());
+        // FIX: CALL ASYNC INSTANCE METHOD for web
+        extracted = await _pdfExtractorService.extractAndVectorizeFromBytes(pdfBytes!);
       } else {
-        // FIX: Cast the result explicitly to List<ParagraphChunk>
-        final extracted = PdfTextExtractorService.extractParagraphsFromFile(pdfFile!.path);
-        chunks.addAll(extracted.cast<ParagraphChunk>());
+        // FIX: CALL ASYNC INSTANCE METHOD for mobile/desktop
+        extracted = await _pdfExtractorService.extractAndVectorizeFromFile(pdfFile!.path);
       }
-      log('DEBUG: Split complete. Total chunks: ${chunks.length}');
+
+      // The result is already List<ParagraphChunk>, no need for .cast()
+      chunks.addAll(extracted);
+
+      log('DEBUG: Vectorization complete. Total chunks: ${chunks.length}');
     } catch (e) {
-      log('ERROR: PDF split failed: $e');
+      log('ERROR: PDF processing failed: $e');
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('PDF Processing Failed: $e')),
+      );
     }
 
     setState(() => loading = false);
   }
 
   // ------------------ PICK IMAGE (OCR) & OCR API CALLS ------------------
+  // ... [pickImage method remains the same] ...
   Future<void> pickImage() async {
     final result = await FileService.pickImageFile();
 
@@ -102,43 +139,46 @@ class _HomePageState extends State<HomePage> {
 
     setState(() {
       isLoading = true;
-      // FIX: Assign Uint8List from FilePickResult.bytes
       imageBytes = result.bytes;
     });
 
     try {
       final text = kIsWeb
-      // FIX: Use result.path as filename on web
           ? await _ocrService.sendToOcrSpaceWeb(result.bytes!, result.path!)
           : await _ocrService.sendToOcrSpace(File(result.path!));
 
       setState(() {
         extractedText = text;
-        _textController.text = extractedText; // Update controller
+        _textController.text = extractedText;
       });
     } catch (e) {
       setState(() {
         extractedText = "OCR failed: $e";
-        _textController.text = extractedText; // Update controller
+        _textController.text = extractedText;
       });
     } finally {
       setState(() => isLoading = false);
     }
   }
 
+
   // ------------------ TOKENIZER/COMPARISON LOGIC ------------------
+  // FIX: This method will eventually need updating to use the vector service
+  // to vectorize extractedText before comparison! (Leaving for next step)
   Future<List<ScoredChunk>> compareChunks() async {
-    // ExtractedText is kept in sync via _textController.onChanged
     if (extractedText.isEmpty || chunks.isEmpty) {
       log('DEBUG: Comparison skipped. Search text empty or no chunks.');
       return [];
     }
 
+    // NOTE: This call to _comparisonService.compareChunks is where the next
+    // vectorization work will focus (vectorizing 'extractedText').
     return _comparisonService.compareChunks(extractedText, chunks);
   }
 
 
   // ------------------ SHOW PDF NAVIGATOR ------------------
+  // ... [showPdfNavigator method remains the same] ...
   void showPdfNavigator(List<ScoredChunk> rankedChunks) {
     if (rankedChunks.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -224,7 +264,6 @@ class _HomePageState extends State<HomePage> {
                   ),
                   style: const TextStyle(fontSize: 16, height: 1.5),
                   onChanged: (newText) {
-                    // Update the state variable directly for comparison
                     extractedText = newText;
                   },
                 ),
