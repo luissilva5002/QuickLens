@@ -32,20 +32,6 @@ It uses chunk-based processing and intelligent navigation to let you inspect doc
 
 ---
 
-## 📂 Project Structure
-
-```text
-quicklens/
- ├── lib/
- │   ├── pdfViewer.dart        # Core PDF visualization logic
- │   ├── ExtractorService.dart # Logic for chunking and extracting text
- │   ├── ui/                   # User Interface widgets and pages
- │   └── main.dart             # Application entry point
- ├── web/                      # Web-specific configuration
- ├── assets/                   # Static assets (icons, models, fonts)
- └── README.md                 # Project documentation
- ```
-
 ## 🌐 Live Demo
 
 You can try QuickLens directly in your browser without installing anything:
