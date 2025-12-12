@@ -6,9 +6,6 @@ import 'dart:io';
 // External Imports
 import 'package:desktop_drop/desktop_drop.dart';
 import 'package:cross_file/cross_file.dart';
-// Note: We don't strictly need file_picker import here if we handle data as bytes/path,
-// but keeping it ensures compatibility if you use specific types elsewhere.
-import 'package:file_picker/file_picker.dart';
 
 import '../keys.dart';
 import '../services/extractor_service.dart';
@@ -41,8 +38,9 @@ class _HomePageState extends State<HomePage> {
 
   // Toggles & Loading
   bool inferJson = false;
-  bool loading = false; // PDF processing
-  bool isLoading = false; // OCR processing
+  bool loading = false; // PDF processing state
+  double _processingProgress = 0.0; // 0.0 to 1.0
+  bool isLoading = false; // OCR processing state
 
   // OCR / Text Input State
   Uint8List? imageBytes;
@@ -76,9 +74,8 @@ class _HomePageState extends State<HomePage> {
 
   // ------------------ PDF LOGIC ------------------
 
-  /// core helper to load PDF data from any source (Picker or Drag)
+  /// Core helper to load PDF data from any source (Picker or Drag)
   Future<void> _loadPdfData(Uint8List? bytes, String? path) async {
-    // Basic validation
     if (bytes == null && path == null) return;
 
     setState(() {
@@ -109,7 +106,6 @@ class _HomePageState extends State<HomePage> {
     if (files.isEmpty) return;
     final file = files.first;
 
-    // Validation
     if (!file.name.toLowerCase().endsWith('.pdf')) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -119,10 +115,7 @@ class _HomePageState extends State<HomePage> {
       return;
     }
 
-    // Read bytes (Required for web compatibility)
     final bytes = await file.readAsBytes();
-
-    // Pass to helper
     await _loadPdfData(bytes, file.path);
   }
 
@@ -131,23 +124,43 @@ class _HomePageState extends State<HomePage> {
 
     setState(() {
       loading = true;
+      _processingProgress = 0.0; // Reset progress bar
       chunks.clear();
       jsonQuestions.clear();
     });
 
     try {
       if (inferJson) {
+        // --- JSON MODE ---
         if (kIsWeb) {
-          jsonQuestions = PdfQuestionExtractor.extractQuestionsFromBytes(pdfBytes!, "web_doc.pdf");
+          // ADDED AWAIT
+          jsonQuestions = await PdfQuestionExtractor.extractQuestionsFromBytes(
+            pdfBytes!,
+            "web_doc.pdf",
+            onProgress: (p) => setState(() => _processingProgress = p),
+          );
         } else {
-          jsonQuestions = PdfQuestionExtractor.extractQuestionsFromFile(pdfFile!.path);
+          // ADDED AWAIT
+          jsonQuestions = await PdfQuestionExtractor.extractQuestionsFromFile(
+            pdfFile!.path,
+            onProgress: (p) => setState(() => _processingProgress = p),
+          );
         }
       } else {
+        // --- STANDARD CHUNK MODE ---
         if (kIsWeb) {
-          final extracted = PdfTextExtractorService.extractParagraphsFromBytes(pdfBytes!);
+          // ADDED AWAIT
+          final extracted = await PdfTextExtractorService.extractParagraphsFromBytes(
+            pdfBytes!,
+            onProgress: (p) => setState(() => _processingProgress = p),
+          );
           chunks.addAll(extracted.cast<ParagraphChunk>());
         } else {
-          final extracted = PdfTextExtractorService.extractParagraphsFromFile(pdfFile!.path);
+          // ADDED AWAIT
+          final extracted = await PdfTextExtractorService.extractParagraphsFromFile(
+            pdfFile!.path,
+            onProgress: (p) => setState(() => _processingProgress = p),
+          );
           chunks.addAll(extracted.cast<ParagraphChunk>());
         }
       }
@@ -295,19 +308,48 @@ class _HomePageState extends State<HomePage> {
           child: Container(color: Colors.grey[200], height: 1),
         ),
       ),
-      // --- DOCKED ACTION BUTTON ---
+
+      bottomNavigationBar: Container(
+        padding: const EdgeInsets.fromLTRB(20, 10, 20, 30),
+        decoration: const BoxDecoration(
+          color: Colors.white,
+          border: Border(top: BorderSide(color: Colors.black12)),
+        ),
+        child: SafeArea(
+          child: ElevatedButton(
+            onPressed: handleComparison,
+            style: ElevatedButton.styleFrom(
+              backgroundColor: kFmupYellow,
+              foregroundColor: kDarkText,
+              padding: const EdgeInsets.symmetric(vertical: 20),
+              elevation: isReady ? 2 : 0,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+            ),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Icon(inferJson ? Icons.saved_search : Icons.compare_arrows, size: 28),
+                const SizedBox(width: 12),
+                Text(
+                  inferJson ? "FIND ANSWER IN PDF" : "COMPARE & NAVIGATE",
+                  style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w900, letterSpacing: 0.5),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+
       body: SingleChildScrollView(
         padding: const EdgeInsets.all(24),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            // --- SECTION 1: SOURCE ---
             Text("1. SOURCE DOCUMENT",
                 style: TextStyle(color: kSubText, fontWeight: FontWeight.w900, fontSize: 13, letterSpacing: 0.5)
             ),
             const SizedBox(height: 12),
 
-            // PDF DRAG TARGET
             DropTarget(
               onDragDone: (details) => _handleDroppedPdf(details.files),
               onDragEntered: (_) => setState(() => _isDraggingPdf = true),
@@ -324,7 +366,6 @@ class _HomePageState extends State<HomePage> {
                 ),
                 child: Column(
                   children: [
-                    // File Info Tile
                     ListTile(
                       contentPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
                       leading: Container(
@@ -342,10 +383,29 @@ class _HomePageState extends State<HomePage> {
                         (pdfFile != null || pdfBytes != null) ? "PDF Loaded Successfully" : "No PDF Selected",
                         style: TextStyle(fontWeight: FontWeight.w800, fontSize: 16, color: kDarkText),
                       ),
+                      // --- PROGRESS BAR AREA ---
                       subtitle: loading
-                          ? const Padding(
-                        padding: EdgeInsets.only(top: 8.0),
-                        child: LinearProgressIndicator(minHeight: 2),
+                          ? Padding(
+                        padding: const EdgeInsets.only(top: 12.0),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            ClipRRect(
+                              borderRadius: BorderRadius.circular(4),
+                              child: LinearProgressIndicator(
+                                value: _processingProgress,
+                                minHeight: 6,
+                                backgroundColor: Colors.grey[200],
+                                valueColor: AlwaysStoppedAnimation<Color>(kFmupYellow),
+                              ),
+                            ),
+                            const SizedBox(height: 4),
+                            Text(
+                              "Processing... ${(_processingProgress * 100).toInt()}%",
+                              style: TextStyle(fontSize: 12, color: kSubText),
+                            ),
+                          ],
+                        ),
                       )
                           : Text(
                         (pdfFile != null || pdfBytes != null)
@@ -366,7 +426,6 @@ class _HomePageState extends State<HomePage> {
 
                     const Divider(height: 1, thickness: 1),
 
-                    // Toggle Switch (Flat Design)
                     Container(
                       color: Colors.transparent,
                       child: SwitchListTile(
@@ -394,13 +453,11 @@ class _HomePageState extends State<HomePage> {
 
             const SizedBox(height: 30),
 
-            // --- SECTION 2: INPUT ---
             Text("2. SEARCH QUERY",
                 style: TextStyle(color: kSubText, fontWeight: FontWeight.w900, fontSize: 13, letterSpacing: 0.5)
             ),
             const SizedBox(height: 12),
 
-            // IMAGE/TEXT DRAG TARGET
             DropTarget(
               onDragDone: (details) => _handleDroppedImage(details.files),
               onDragEntered: (_) => setState(() => _isDraggingImage = true),
@@ -418,7 +475,6 @@ class _HomePageState extends State<HomePage> {
                 ),
                 child: Column(
                   children: [
-                    // Toolbar
                     Container(
                       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
                       decoration: BoxDecoration(
@@ -441,7 +497,6 @@ class _HomePageState extends State<HomePage> {
                       ),
                     ),
 
-                    // Text Editor / Drop Zone
                     Expanded(
                       child: isLoading
                           ? Center(
@@ -492,38 +547,10 @@ class _HomePageState extends State<HomePage> {
                 ),
               ),
             ),
-
-            const SizedBox(height: 80), // Space for bottom bar
+            const SizedBox(height: 80),
           ],
         ),
       ),
-      bottomNavigationBar: Padding(
-        padding: const EdgeInsets.all(24.0),
-        child: SafeArea(
-          child: ElevatedButton(
-            onPressed: handleComparison,
-            style: ElevatedButton.styleFrom(
-              backgroundColor: kFmupYellow,
-              foregroundColor: kDarkText,
-              padding: const EdgeInsets.symmetric(vertical: 20),
-              elevation: isReady ? 2 : 0,
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-            ),
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                Icon(inferJson ? Icons.saved_search : Icons.compare_arrows, size: 28),
-                const SizedBox(width: 12),
-                Text(
-                  inferJson ? "FIND ANSWER IN PDF" : "COMPARE & NAVIGATE",
-                  style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w900, letterSpacing: 0.5),
-                ),
-              ],
-            ),
-          ),
-        ),
-      ),
-
     );
   }
 }

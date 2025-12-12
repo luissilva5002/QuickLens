@@ -1,29 +1,37 @@
 import 'dart:io';
 import 'dart:typed_data';
 import 'package:syncfusion_flutter_pdf/pdf.dart';
-
-// FIX: Import the centralized model definition
 import '../models/paragraph_chunk.dart';
 
 class PdfTextExtractorService {
-  /// Extracts paragraphs from the PDF at [path], preserving the page number for each paragraph.
-  static List<ParagraphChunk> extractParagraphsFromFile(String path) {
-    final bytes = File(path).readAsBytesSync();
-    return _extractParagraphsFromBytesInternal(bytes);
+
+  // Changed to Future
+  static Future<List<ParagraphChunk>> extractParagraphsFromFile(String path, {Function(double)? onProgress}) async {
+    final bytes = await File(path).readAsBytes();
+    return _extractParagraphsFromBytesInternal(bytes, onProgress: onProgress);
   }
 
-  /// Extracts paragraphs from the PDF [bytes] for web, preserving the page number.
-  static List<ParagraphChunk> extractParagraphsFromBytes(Uint8List bytes) {
-    return _extractParagraphsFromBytesInternal(bytes);
+  // Changed to Future
+  static Future<List<ParagraphChunk>> extractParagraphsFromBytes(Uint8List bytes, {Function(double)? onProgress}) async {
+    return _extractParagraphsFromBytesInternal(bytes, onProgress: onProgress);
   }
 
-  // Internal helper to avoid code duplication
-  static List<ParagraphChunk> _extractParagraphsFromBytesInternal(Uint8List bytes) {
+  static Future<List<ParagraphChunk>> _extractParagraphsFromBytesInternal(
+      Uint8List bytes,
+      {Function(double)? onProgress}
+      ) async { // Marked async
     final PdfDocument document = PdfDocument(inputBytes: bytes);
     List<ParagraphChunk> paragraphs = [];
+    int totalPages = document.pages.count;
 
-    for (int pageIndex = 0; pageIndex < document.pages.count; pageIndex++) {
-      // Note: PdfTextExtractor uses the document object
+    for (int pageIndex = 0; pageIndex < totalPages; pageIndex++) {
+      // --- CRITICAL FIX: YIELD TO UI THREAD ---
+      await Future.delayed(Duration.zero);
+
+      if (onProgress != null) {
+        onProgress((pageIndex + 1) / totalPages);
+      }
+
       final String pageText = PdfTextExtractor(document).extractText(
         startPageIndex: pageIndex,
         endPageIndex: pageIndex,
@@ -32,13 +40,7 @@ class PdfTextExtractorService {
       final List<String> pageParagraphs = _splitIntoParagraphs(pageText);
 
       for (final p in pageParagraphs) {
-        paragraphs.add(
-          ParagraphChunk(
-            // Key Fix: Store page as 1-based page number
-            page: pageIndex + 1,
-            text: p,
-          ),
-        );
+        paragraphs.add(ParagraphChunk(page: pageIndex + 1, text: p));
       }
     }
 
@@ -46,10 +48,9 @@ class PdfTextExtractorService {
     return paragraphs;
   }
 
-  /// Split text into paragraphs based on blank lines.
   static List<String> _splitIntoParagraphs(String rawText) {
     return rawText
-        .split(RegExp(r'\n\s*\n')) // Split on blank lines / empty lines
+        .split(RegExp(r'\n\s*\n'))
         .map((s) => s.trim())
         .where((s) => s.isNotEmpty)
         .toList();

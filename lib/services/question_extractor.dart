@@ -8,73 +8,70 @@ import 'package:syncfusion_flutter_pdf/pdf.dart';
 import 'package:path/path.dart' as p;
 
 class PdfQuestionExtractor {
-  // ---------------------------------------------------------------------------
-  // ENTRY POINT 1: FILE PATH (Mobile/Desktop)
-  // ---------------------------------------------------------------------------
-  static List<Map<String, dynamic>> extractQuestionsFromFile(String path) {
+
+  // Changed to Future
+  static Future<List<Map<String, dynamic>>> extractQuestionsFromFile(String path, {Function(double)? onProgress}) async {
     log('DEBUG: Extracting questions from file: $path');
-    final bytes = File(path).readAsBytesSync();
+    final bytes = await File(path).readAsBytes();
     final fileName = p.basename(path);
-    return _extractQuestionsAndDump(bytes, fileName, path);
+    return _extractQuestionsAndPrint(bytes, fileName, onProgress: onProgress);
   }
 
-  // ---------------------------------------------------------------------------
-  // ENTRY POINT 2: BYTES (Web)
-  // ---------------------------------------------------------------------------
-  static List<Map<String, dynamic>> extractQuestionsFromBytes(
-      Uint8List bytes, String fileName) {
-    return _extractQuestionsAndDump(bytes, fileName, null);
+  // Changed to Future
+  static Future<List<Map<String, dynamic>>> extractQuestionsFromBytes(
+      Uint8List bytes, String fileName, {Function(double)? onProgress}) async {
+    return _extractQuestionsAndPrint(bytes, fileName, onProgress: onProgress);
   }
 
-  static List<Map<String, dynamic>> _extractQuestionsAndDump(
-      Uint8List bytes, String fileName, String? originalPath) {
+  static Future<List<Map<String, dynamic>>> _extractQuestionsAndPrint(
+      Uint8List bytes, String fileName, {Function(double)? onProgress}) async {
 
-    // 1. Extract
-    final results = _extractQuestionsFromBytesInternal(bytes, fileName);
+    // Await internal
+    final results = await _extractQuestionsFromBytesInternal(bytes, fileName, onProgress: onProgress);
 
-    // 2. Dump (Logic handled for both Web and IO)
     final String jsonOutput = const JsonEncoder.withIndent('  ').convert(results);
 
-    if (kIsWeb || originalPath == null) {
-      log('✅ SUCCESS (Web/Bytes): Extracted ${results.length} questions.');
-      // log(jsonOutput); // Uncomment to dump to console
-    } else {
-      try {
-        final String outputPath = p.join(p.dirname(originalPath), 'questions.json');
-        File(outputPath).writeAsStringSync(jsonOutput);
-        log('✅ SUCCESS: JSON file generated at: $outputPath');
-      } catch (e) {
-        log('⚠️ WARNING: Could not save JSON file. Dumping to console instead.');
-      }
-    }
+    log("---------------- EXTRACTED JSON QUESTIONS START ----------------");
+    final pattern = RegExp('.{1,800}');
+    pattern.allMatches(jsonOutput).forEach((match) => print(match.group(0)));
+    log("---------------- EXTRACTED JSON QUESTIONS END ------------------");
+
     return results;
   }
 
-  // ---------------------------------------------------------------------------
-  // INTERNAL LOGIC
-  // ---------------------------------------------------------------------------
-  static List<Map<String, dynamic>> _extractQuestionsFromBytesInternal(
-      Uint8List bytes, String fileName) {
+  static Future<List<Map<String, dynamic>>> _extractQuestionsFromBytesInternal(
+      Uint8List bytes, String fileName, {Function(double)? onProgress}) async {
+
     final PdfDocument document = PdfDocument(inputBytes: bytes);
     List<_StyledLine> allLines = [];
+    int totalPages = document.pages.count;
 
-    // --- STEP 1: Extract Lines ---
-    for (int i = 0; i < document.pages.count; i++) {
+    // --- STEP 1: Extract Lines & Detect Styles ---
+    for (int i = 0; i < totalPages; i++) {
+
+      // --- CRITICAL FIX: YIELD TO UI THREAD ---
+      await Future.delayed(Duration.zero);
+
+      if (onProgress != null) {
+        onProgress((i + 1) / totalPages);
+      }
+
+      final page = document.pages[i];
       List<TextLine> textLines = PdfTextExtractor(document)
           .extractTextLines(startPageIndex: i, endPageIndex: i);
 
       for (var line in textLines) {
-        bool isBold = false;
+        bool isMarkedAnswer = false;
         String text = line.text;
         for (var word in line.wordCollection) {
           if (word.fontStyle.contains(PdfFontStyle.bold)) {
-            isBold = true;
+            isMarkedAnswer = true;
             break;
           }
         }
         allLines.add(_StyledLine(
           text: text,
-          isBold: isBold,
+          isAnswerMarked: isMarkedAnswer,
           pageIndex: i + 1,
           bounds: line.bounds,
         ));
@@ -134,7 +131,6 @@ class PdfQuestionExtractor {
   // --- Parsing Helpers ---
 
   static final RegExp _numberingRegex = RegExp(r"^\s*\d+(?:\.\d+)*\.\s*");
-  // Matches "1. Statement Text V" or "1. Statement Text F"
   static final RegExp _tfItemPattern = RegExp(r"^\d+(?:\.\d+)*\.\s*(.+?)\s+(V|F)$");
   static final RegExp _optionPattern = RegExp(r"^[A-Ea-e][\.\)]\s*(.+)$");
 
@@ -142,7 +138,6 @@ class PdfQuestionExtractor {
     return text.replaceFirst(_numberingRegex, "").trim();
   }
 
-  // NEW LOGIC: Parses a block into ONE True/False Group object
   static Map<String, dynamic>? _parseTrueFalseGroup(
       List<_StyledLine> block, String fileName) {
 
@@ -150,34 +145,26 @@ class PdfQuestionExtractor {
     List<Map<String, dynamic>> items = [];
     bool foundFirstItem = false;
 
-    // Scan the block
     for (var line in block) {
       final match = _tfItemPattern.firstMatch(line.text);
 
       if (match != null) {
-        // It is a line like "1. statement V"
         foundFirstItem = true;
         String statement = match.group(1)!;
         String vf = match.group(2)!;
 
         items.add({
           "statement": statement.trim(),
-          "answer": vf == "V", // true for V, false for F
+          "answer": vf == "V",
           "original_text": line.text
         });
       } else {
         if (!foundFirstItem) {
-          // Lines BEFORE the first "1. ... V" are the Question Header
           questionHeader.add(line.text);
-        } else {
-          // Lines AFTER the first match that DON'T match are likely
-          // continuations or noise. For simple TF, we often ignore
-          // or append to previous. For now, strict regex match only.
         }
       }
     }
 
-    // If we didn't find any TF items, this is not a TF block
     if (items.isEmpty) return null;
 
     int page = block.isNotEmpty ? block[0].pageIndex : 1;
@@ -185,7 +172,7 @@ class PdfQuestionExtractor {
     return {
       "type": "true_false_group",
       "question": questionHeader.join(" ").trim(),
-      "options": items, // List of {statement, answer}
+      "options": items,
       "location": {
         "file": fileName,
         "page": page,
@@ -209,14 +196,14 @@ class PdfQuestionExtractor {
         String optionText = match.group(1)!.trim();
         optionBuilders.add(_OptionBuilder(
             text: optionText,
-            isBold: line.isBold
+            isMarked: line.isAnswerMarked
         ));
       } else {
         if (parsingOptions) {
           if (optionBuilders.isNotEmpty) {
             var currentOpt = optionBuilders.last;
             currentOpt.text += " " + line.text.trim();
-            if (line.isBold) currentOpt.isBold = true;
+            if (line.isAnswerMarked) currentOpt.isMarked = true;
           }
         } else {
           questionLines.add(_stripNumbering(line.text));
@@ -229,8 +216,7 @@ class PdfQuestionExtractor {
 
     for (var opt in optionBuilders) {
       finalOptions.add(opt.text);
-      if (opt.isBold) {
-        if (correctOption != null) return null;
+      if (opt.isMarked) {
         correctOption = opt.text;
       }
     }
@@ -254,14 +240,14 @@ class PdfQuestionExtractor {
 
 class _StyledLine {
   final String text;
-  final bool isBold;
+  final bool isAnswerMarked;
   final int pageIndex;
   final Rect bounds;
-  _StyledLine({required this.text, required this.isBold, required this.pageIndex, required this.bounds});
+  _StyledLine({required this.text, required this.isAnswerMarked, required this.pageIndex, required this.bounds});
 }
 
 class _OptionBuilder {
   String text;
-  bool isBold;
-  _OptionBuilder({required this.text, required this.isBold});
+  bool isMarked;
+  _OptionBuilder({required this.text, required this.isMarked});
 }
