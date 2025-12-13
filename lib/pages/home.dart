@@ -6,6 +6,8 @@ import 'dart:io';
 // External Imports
 import 'package:desktop_drop/desktop_drop.dart';
 import 'package:cross_file/cross_file.dart';
+// ADDED: Required to count pages for default input values
+import 'package:syncfusion_flutter_pdf/pdf.dart';
 
 import '../keys.dart';
 import '../services/extractor_service.dart';
@@ -94,6 +96,30 @@ class _HomePageState extends State<HomePage> {
       return;
     }
 
+    // --- NEW LOGIC: CALCULATE PAGE COUNT ---
+    int totalPages = 0;
+    try {
+      // We need bytes to count pages using Syncfusion PdfDocument
+      Uint8List? dataToCount = bytes;
+
+      // If we are on mobile/desktop and only have a path, read the bytes now
+      if (dataToCount == null && path != null && !kIsWeb) {
+        final file = File(path);
+        if (await file.exists()) {
+          dataToCount = await file.readAsBytes();
+        }
+      }
+
+      if (dataToCount != null) {
+        // Open document temporarily to count pages
+        final PdfDocument document = PdfDocument(inputBytes: dataToCount);
+        totalPages = document.pages.count;
+        document.dispose(); // Dispose immediately to free memory
+      }
+    } catch (e) {
+      log("Error calculating page count: $e");
+    }
+
     setState(() {
       if (kIsWeb) {
         pdfBytes = bytes;
@@ -105,12 +131,20 @@ class _HomePageState extends State<HomePage> {
           pdfBytes = bytes;
         }
       }
-      // Reset page range and data when loading new file
-      _startPageCtrl.clear();
-      _endPageCtrl.clear();
+
+      // Reset Data
       chunks.clear();
       jsonQuestions.clear();
       _processingProgress = 0.0;
+
+      // Set Page Range Defaults based on count
+      if (totalPages > 0) {
+        _startPageCtrl.text = "1";
+        _endPageCtrl.text = totalPages.toString();
+      } else {
+        _startPageCtrl.clear();
+        _endPageCtrl.clear();
+      }
     });
   }
 
@@ -404,7 +438,7 @@ class _HomePageState extends State<HomePage> {
         ),
       ),
 
-      body: SingleChildScrollView(
+      body: Padding(
         padding: const EdgeInsets.all(24),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
